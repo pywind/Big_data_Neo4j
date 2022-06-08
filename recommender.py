@@ -24,7 +24,7 @@ class Recommender:
     def createUser(self, name, id):
         with self.driver.session() as session:
             result = session.read_transaction(self.__create_user, name, id)
-            return {"result": result}
+            return {"result": "OK"}
     # make user can rate for a movie
     def ratedMovie(self, userId, movieId, rating):
         with self.driver.session() as session:
@@ -34,7 +34,7 @@ class Recommender:
     def deleteRating(self, userId, movieId):
         with self.driver.session() as session:
             result = session.read_transaction(self.__delete_rating, userId, movieId)
-            return {"result": result}
+            return {"result": "DELETED"}
     
     # get recommendations from content-based
     def find_recommendation_content(self, title, by_another_user = False):
@@ -81,11 +81,17 @@ class Recommender:
     @staticmethod
     def __find_by_user_watch(tx, username):
 
-        query = ("""MATCH (u:User {name: $username})-[r:RATED]->(m:Movie),
-                    (m)-[:IN_GENRE]->(g:Genre)<-[:IN_GENRE]-(rec:Movie)
-                    WHERE NOT EXISTS( (u)-[:RATED]->(rec) )
-                    WITH rec, COUNT(g) AS scores
-                    RETURN rec.title AS recommendation, scores
+        query = ("""MATCH (u:User)-[r:RATED]->(m:Movie)
+                    WHERE u.name = $username
+                    WITH u, avg(r.rating) AS mean
+
+                    MATCH (u)-[r:RATED]->(m:Movie)-[:IN_GENRE]->(g:Genre)
+                    WHERE r.rating > mean
+                    WITH u, g
+
+                    MATCH (g)<-[:IN_GENRE]-(rec:Movie)
+                    WHERE NOT EXISTS((u)-[:RATED]->(rec))
+                    RETURN rec.title AS recommendation, rec.year, COUNT(g) AS scores
                     ORDER BY scores DESC LIMIT 10""")
         try:
             result = tx.run(query, username = username)
@@ -95,16 +101,16 @@ class Recommender:
             raise 
     @staticmethod
     def _find_and_return_content_based(tx, title, by_another_user):    
-        if by_another_user:
+        if by_another_user == True:
             #common score as number another users also watched
             query = ("""MATCH (m:Movie)<-[:RATED]-(u:User)-[:RATED]->(rec:Movie)
-                        WHERE m.title = "Crimson Tide"
+                        WHERE m.title = $title
                         WITH rec, COUNT(u) AS common_score
                         ORDER BY common_score DESC LIMIT 10
                         RETURN rec.title AS recommendation, common_score""")
         else:
             #common score as number genres 
-            query = ("""MATCH (m:Movie)-[g:IN_GENRE*2]-(n:Movie)
+            query = ("""MATCH (m:Movie)-[g:ACTED_IN|IN_GENRE|DIRECTED*2]-(n:Movie)
                         WHERE m.title = $title
                         WITH n, COUNT(g) as common_score
                         RETURN n.title as recommendation, common_score
@@ -133,9 +139,7 @@ class Recommender:
         now = datetime.now()
         # time is now
         timestamp = round(datetime.timestamp(now))
-        query = ("""MATCH
-                (u:User),
-                (m:Movie)
+        query = ("""MATCH(u:User),(m:Movie)
                 WHERE u.userId = $userId AND m.movieId = $movieId
                 CREATE (u)-[r:RATED {rating: $rating  , timestamp:$stamp}]->(m)
                 RETURN type(r) as relation , r.rating as rating""")
@@ -165,7 +169,7 @@ class Recommender:
         )
         try:
             result = tx.run(query, movie_name=movie_name)
-            return [record["movie"] for record in result]
+            return [ {record["movie"]: record["reviews"]} for record in result]
         except ServiceUnavailable as exception:
             logging.error("{query} raised an error: \n {exception}".format(query=query, exception=exception))
             raise
