@@ -81,21 +81,13 @@ class Recommender:
     @staticmethod
     def __find_by_user_watch(tx, username):
 
-        query = ("""MATCH (u:User)-[r:RATED]->(m:Movie)
-                    WHERE u.name = $username
-                    WITH u, avg(r.rating) AS mean
-
-                    MATCH (u)-[r:RATED]->(m:Movie)-[:IN_GENRE]->(g:Genre)
-                    WHERE r.rating > mean
-                    WITH u, g
-
-                    MATCH (g)<-[:IN_GENRE]-(rec:Movie)
-                    WHERE NOT EXISTS((u)-[:RATED]->(rec))
-                    RETURN rec.title AS recommendation, rec.year, COUNT(g) AS scores
-                    ORDER BY scores DESC LIMIT 10""")
+        query = ("""MATCH (u:User {name: $username})-[:RATED]->(:Movie)<-[:RATED]-(o:User), (o)-[:RATED]->(rec:Movie)
+                    WHERE NOT EXISTS( (u)-[:RATED]->(rec) )
+                    RETURN rec.title as title, rec.year as year
+                    LIMIT 25""")
         try:
             result = tx.run(query, username = username)
-            return  [ {record['recommendation']:record['scores']} for record in result]
+            return  [ {record['title']:record['year']} for record in result]
         except ServiceUnavailable as exception:
             logging.error("Recommend movies by user watched: {query} raised an error: \n {exception}".format(query=query, exception=exception))
             raise 
